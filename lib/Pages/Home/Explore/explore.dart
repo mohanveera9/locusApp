@@ -5,7 +5,6 @@ import 'package:locus/Pages/Home/Explore/newGroup.dart';
 import 'package:locus/Pages/Home/Explore/userView.dart';
 import 'package:locus/widgets/exploreContainer.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:timeago/timeago.dart' as timeago;
 
 class Explore extends StatefulWidget {
   const Explore({super.key});
@@ -148,20 +147,6 @@ class _ExploreState extends State<Explore> with SingleTickerProviderStateMixin {
 
   /// Updates the explore list by filtering communities that are accepted,
   /// are not the user's own group, and are within the specified distance.
-  /// Fetch last message for a community
-  Future<String?> fetchLastMessage(String comId) async {
-    final fetchedMessages = await supabase
-        .from("community_messages")
-        .select("message, created_at")
-        .eq("com_id", comId)
-        .order("created_at", ascending: false)
-        .limit(1)
-        .maybeSingle();
-
-    return fetchedMessages?['message'];
-  }
-
-  /// Updates explore list with last message included
   void updateExploreList(List<Map<String, dynamic>> data) async {
     final userId = supabase.auth.currentUser!.id;
     final prof = await supabase
@@ -170,44 +155,49 @@ class _ExploreState extends State<Explore> with SingleTickerProviderStateMixin {
         .eq("user_id", userId)
         .maybeSingle();
 
-    List<Map<String, dynamic>> updatedList = [];
-
-    for (var item in data) {
-      if (!(item['accepted'] == true && item['com_id'] != prof?['com_id'])) {
-        continue;
-      }
-
-      if (item['location'] == null) continue;
-      final loc = item['location'];
-      final double communityLat = loc['lat'] is num
-          ? loc['lat'].toDouble()
-          : double.tryParse(loc['lat'].toString()) ?? 0;
-      final double communityLong = loc['long'] is num
-          ? loc['long'].toDouble()
-          : double.tryParse(loc['long'].toString()) ?? 0;
-
-      final double distance = calculateDistance(
-          currentUserLat, currentUserLong, communityLat, communityLong);
-
-      if (distance > distanceThreshold) continue;
-
-      // Fetch last message asynchronously
-      final lastMessage = await fetchLastMessage(item['com_id']);
-
-      updatedList.add({
-        'id': item['id'].toString(),
-        'name': item['title'],
-        'description': item['desc'],
-        'last_message': lastMessage,
-        'created_at': item['created_at'],
-        'tag': item['tags'],
-        'img': 'assets/img/mohan.jpg',
-        'com_id': item['com_id']
-      });
-    }
-
     setState(() {
-      exploreList = updatedList;
+      bool userIsAdmin = data.any((item) => item['com_id'] == prof?['com_id']);
+      isAdmin = userIsAdmin;
+      isAccepted = data.any((item) =>
+          (item['com_id'] == prof?['com_id'] && item['accepted'] == true));
+
+      exploreList = data
+          .where((item) {
+            // Only include communities that are accepted and are not the user's own group.
+            if (!(item['accepted'] == true &&
+                item['com_id'] != prof?['com_id'])) {
+              return false;
+            }
+            // Ensure that location information is available.
+            if (item['location'] == null) return false;
+            final loc = item['location'];
+
+            // Extract latitude.
+            final double communityLat = loc['lat'] is num
+                ? loc['lat'].toDouble()
+                : double.tryParse(loc['lat'].toString()) ?? 0;
+
+            // Extract longitude.
+            // Adjust the key name if you store it as 'lng' or 'long' (here, we're using 'long').
+            final double communityLong = loc['long'] is num
+                ? loc['long'].toDouble()
+                : double.tryParse(loc['long'].toString()) ?? 0;
+
+            // Calculate the distance between the user's current location and the community's location.
+            final double distance = calculateDistance(
+                currentUserLat, currentUserLong, communityLat, communityLong);
+            return distance <= distanceThreshold;
+          })
+          .map((item) => {
+                'id': item['id'].toString(),
+                'name': item['title'],
+                'description': item['desc'],
+                'tag': item['tags'],
+                'img':
+                    'assets/img/mohan.jpg', // or use an image from the record if available
+                'com_id': item['com_id']
+              })
+          .toList();
     });
   }
 
@@ -334,9 +324,8 @@ class _ExploreState extends State<Explore> with SingleTickerProviderStateMixin {
                               onTap: (isAdmin && isAccepted)
                                   ? () => Navigator.of(context).push(
                                         MaterialPageRoute(
-                                          builder: (builder) =>
-                                              const Adminview(),
-                                        ),
+                                            builder: (builder) =>
+                                                const Adminview()),
                                       )
                                   : null,
                               child: Container(
@@ -379,23 +368,16 @@ class _ExploreState extends State<Explore> with SingleTickerProviderStateMixin {
                               itemCount: getFilteredExploreList().length,
                               itemBuilder: (context, index) {
                                 final list = getFilteredExploreList()[index];
-                                final String displayText = (list['last_message']
-                                        as String?) ??
-                                    "${(list['description'] as String?) ?? 'No description available'} • ${timeago.format(DateTime.tryParse(list['created_at'] ?? '') ?? DateTime.now())}";
-
                                 return GestureDetector(
                                   onTap: () {
                                     Navigator.of(context).push(
                                         MaterialPageRoute(builder: (context) {
-                                      return Userview(
-                                        id: list['com_id'],
-                                        name: list['name'],
-                                      );
+                                      return Userview(id: list['com_id'],name: list['name'],);
                                     }));
                                   },
                                   child: Explorecontainer(
                                     name: list['name'],
-                                    description: displayText,
+                                    description: list['description'],
                                     img: list['img'],
                                   ),
                                 );
@@ -448,4 +430,4 @@ class CircleClipper extends CustomClipper<Rect> {
   bool shouldReclip(CircleClipper oldClipper) {
     return oldClipper.radius != radius;
   }
-}
+}        
