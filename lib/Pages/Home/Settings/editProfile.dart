@@ -1,8 +1,9 @@
-import 'dart:io';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:locus/Utils/cloudinary.dart';
+import 'package:locus/widgets/Buttons/newButton.dart';
 import 'package:locus/widgets/button.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -42,9 +43,12 @@ class DateTextInputFormatter extends TextInputFormatter {
 class Editprofile extends StatefulWidget {
   final String name;
   final String dob;
+  final String photoURL;
   const Editprofile({
     super.key,
-    required this.name, required this.dob,
+    required this.name,
+    required this.dob,
+    required this.photoURL,
   });
 
   @override
@@ -56,9 +60,10 @@ class _EditprofileState extends State<Editprofile> {
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _birthdayController = TextEditingController();
 
-  File? _selectedImage;
+  XFile? _selectedImage;
   Color avatarColor = Colors.blue; // default background color
-
+  late Uint8List _selectedImageData;
+  bool isSend = false;
   @override
   void initState() {
     super.initState();
@@ -85,20 +90,26 @@ class _EditprofileState extends State<Editprofile> {
     );
   }
 
-
   /// Updates the profile in Supabase.
   Future<void> _updateProfile(BuildContext ctx) async {
     if (!formKey.currentState!.validate()) return;
 
+    setState(() {
+      isSend = true;
+    });
     final supabase = Supabase.instance.client;
     final userId = supabase.auth.currentUser!.id;
-
+    final url = await uploadFile(_selectedImage);
     Map<String, dynamic> updates = {
       'name': _nameController.text,
       'dob': _birthdayController.text,
+      "image_link": url,
     };
 
     await supabase.from('profile').update(updates).eq('user_id', userId);
+    setState(() {
+      isSend = false;
+    });
     Navigator.of(ctx).pop();
   }
 
@@ -106,37 +117,64 @@ class _EditprofileState extends State<Editprofile> {
   Future<void> _pickImage() async {
     final ImagePicker picker = ImagePicker();
     final XFile? image = await picker.pickImage(source: ImageSource.gallery);
+    var data = await image?.readAsBytes();
     if (image != null) {
       setState(() {
-        _selectedImage = File(image.path);
+        _selectedImage = image;
+        _selectedImageData = data!;
       });
       // Optionally, upload the image to Supabase Storage and update the profile.
     }
   }
 
-  /// Builds the circular avatar.
+  /// Builds the circular avatar with pencil icon.
   Widget _buildAvatar() {
-    return GestureDetector(
-      onTap: _pickImage,
-      child: CircleAvatar(
-        radius: 50,
-        backgroundColor:
-            _selectedImage == null ? avatarColor : Colors.transparent,
-        backgroundImage:
-            _selectedImage != null ? FileImage(_selectedImage!) : null,
-        child: _selectedImage == null
-            ? Text(
-                _nameController.text.isNotEmpty
-                    ? _nameController.text[0].toUpperCase()
-                    : '?',
-                style: const TextStyle(
-                  fontSize: 40,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.white,
-                ),
-              )
-            : null,
-      ),
+    return Stack(
+      children: [
+        CircleAvatar(
+          radius: 50,
+          backgroundColor:
+              widget.photoURL == "NAN" ? avatarColor : Colors.transparent,
+          backgroundImage: _selectedImage != null
+              ? MemoryImage(_selectedImageData)
+              : (widget.photoURL != "NAN"
+                  ? NetworkImage(widget.photoURL)
+                  : null),
+          child: widget.photoURL == "NAN"
+              ? Text(
+                  _nameController.text.isNotEmpty
+                      ? _nameController.text[0].toUpperCase()
+                      : '?',
+                  style: const TextStyle(
+                    fontSize: 40,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                  ),
+                )
+              : null,
+        ),
+        Positioned(
+          bottom: 0,
+          right: 0,
+          child: Container(
+            height: 30,
+            width: 30,
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.primary,
+              shape: BoxShape.circle,
+            ),
+            child: IconButton(
+              padding: EdgeInsets.zero,
+              onPressed: _pickImage,
+              icon: Icon(
+                Icons.edit,
+                color: Colors.white,
+                size: 20,
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -269,20 +307,22 @@ class _EditprofileState extends State<Editprofile> {
                       ),
                       SizedBox(height: height * 0.04),
                       Center(
-                        child: Button1(
-                          title: 'Save',
-                          colors: Colors.white,
-                          textColor: Theme.of(context).colorScheme.primary,
-                          onTap: () async {
-                            if (formKey.currentState!.validate()) {
-                              await _updateProfile(context);
-                              print('Profile updated successfully');
-                            } else {
-                              print('Form is invalid');
-                            }
-                          },
+                        child: CustomButton(
+                          text: isSend ? "Saving.." : "Save",
+                          color: Theme.of(context).colorScheme.primary,
+                          textColor: Colors.white,
+                          onPressed: isSend
+                              ? () {}
+                              : () async {
+                                  if (formKey.currentState!.validate()) {
+                                    await _updateProfile(context);
+                                    print('Profile updated successfully');
+                                  } else {
+                                    print('Form is invalid');
+                                  }
+                                },
                         ),
-                      ),
+                      )
                     ],
                   ),
                 ),

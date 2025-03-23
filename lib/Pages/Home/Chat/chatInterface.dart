@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart'; // For formatting timestamps
-import 'package:locus/widgets/chat_bubble_user.dart';
 import 'package:locus/widgets/chat_bubble.dart';
+import 'package:locus/widgets/chat_bubble_user.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class Chatinterface extends StatefulWidget {
@@ -24,6 +24,7 @@ class Chatinterface extends StatefulWidget {
 class _ChatinterfaceState extends State<Chatinterface> {
   final TextEditingController _controller = TextEditingController();
   final ScrollController _scrollController = ScrollController();
+  final ScrollController _inputScrollController = ScrollController();
   bool isTyping = false;
   List<Map<String, dynamic>> messages = []; // Combined messages list
   String? userName;
@@ -32,6 +33,7 @@ class _ChatinterfaceState extends State<Chatinterface> {
   final supabase = Supabase.instance.client;
   StreamSubscription? _messagesSubscription;
   bool isFetchMessages = false;
+  bool isSend = false;
 
   @override
   void initState() {
@@ -128,7 +130,7 @@ class _ChatinterfaceState extends State<Chatinterface> {
 
       final data = await supabase
           .from("private_messages")
-          .select("message, sent_by, created_at")
+          .select("message, sent_by, created_at, hidden_by")
           .eq("chat_id", chatId)
           .order("created_at", ascending: true);
 
@@ -136,6 +138,14 @@ class _ChatinterfaceState extends State<Chatinterface> {
         List<Map<String, dynamic>> allMessages = [];
 
         for (var message in data) {
+          // Check if the current message is hidden for this user
+          List<String> hiddenBy = List<String>.from(message['hidden_by'] ?? []);
+
+          // Skip this message if it's hidden for the current user
+          if (hiddenBy.contains(currentUserId)) {
+            continue;
+          }
+
           final formattedTime = formatTimestamp(message['created_at']);
           final isCurrentUser = message['sent_by'] == currentUserId;
 
@@ -170,6 +180,9 @@ class _ChatinterfaceState extends State<Chatinterface> {
 
   Future<void> sendMessage() async {
     if (_controller.text.isEmpty || chatId == -1) return;
+    setState(() {
+      isSend = true;
+    });
 
     final currentUserId = supabase.auth.currentUser?.id;
     if (currentUserId == null) {
@@ -190,10 +203,14 @@ class _ChatinterfaceState extends State<Chatinterface> {
 
       // Clear the text field
       _controller.clear();
-
+      _inputScrollController.jumpTo(0);
       // No need to manually update messages as the stream will trigger fetchMessages()
     } catch (error) {
       print("Error sending message: $error");
+    } finally {
+      setState(() {
+        isSend = false;
+      });
     }
   }
 
@@ -222,13 +239,29 @@ class _ChatinterfaceState extends State<Chatinterface> {
 
   Future<void> _clearChat() async {
     try {
-      await supabase.from("private_messages").delete().eq("chat_id", chatId);
+      final userId = supabase.auth.currentUser!.id;
+      final allMessages = await supabase
+          .from("private_messages")
+          .select("id, hidden_by")
+          .eq("chat_id", chatId);
 
-      setState(() {
-        messages.clear(); // Clear messages list in UI
-      });
+      for (var message in allMessages) {
+        // Ensure 'hidden_by' is a List<String>
+        List<String> hiddenBy = List<String>.from(message['hidden_by'] ?? []);
 
-      print("Chat cleared successfully");
+        // Only update if the user ID isn't already in the list
+        if (!hiddenBy.contains(userId)) {
+          hiddenBy.add(userId);
+
+          // Update this specific message in the database
+          await supabase
+              .from("private_messages")
+              .update({'hidden_by': hiddenBy}).eq('id', message['id']);
+        }
+      }
+
+      // After updating the database, refresh messages
+      await fetchMessages();
     } catch (error) {
       print("Error clearing chat: $error");
     }
@@ -319,17 +352,18 @@ class _ChatinterfaceState extends State<Chatinterface> {
         appBar: AppBar(
           backgroundColor: Theme.of(context).colorScheme.primary,
           automaticallyImplyLeading: false,
+          titleSpacing: 0, // Remove default spacing
+          leading: IconButton(
+            onPressed: () {
+              Navigator.of(context).pop();
+            },
+            icon: const Icon(
+              Icons.arrow_back_ios,
+              color: Colors.white,
+            ),
+          ),
           title: Row(
             children: [
-              IconButton(
-                onPressed: () {
-                  Navigator.of(context).pop();
-                },
-                icon: Icon(
-                  Icons.arrow_back_ios,
-                  color: Colors.white,
-                ),
-              ),
               ClipOval(
                 child: SizedBox(
                   width: 40,
@@ -338,12 +372,16 @@ class _ChatinterfaceState extends State<Chatinterface> {
                 ),
               ),
               const SizedBox(width: 10),
-              Text(
-                widget.userName ?? "Unknown User",
-                style: const TextStyle(
-                  fontSize: 18,
-                  color: Colors.white,
-                  fontFamily: 'Electrolize',
+              Expanded(
+                child: Text(
+                  widget.userName ?? "Unknown User",
+                  style: const TextStyle(
+                    fontSize: 18,
+                    color: Colors.white,
+                    fontFamily: 'Electrolize',
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
                 ),
               ),
             ],
@@ -377,8 +415,10 @@ class _ChatinterfaceState extends State<Chatinterface> {
                           children: const [
                             Icon(Icons.delete, color: Colors.black),
                             SizedBox(width: 10),
-                            Text("Clear Chat",
-                                style: TextStyle(color: Colors.black)),
+                            Text(
+                              "Clear Chat",
+                              style: TextStyle(color: Colors.black),
+                            ),
                           ],
                         ),
                       ),
@@ -388,8 +428,10 @@ class _ChatinterfaceState extends State<Chatinterface> {
                           children: const [
                             Icon(Icons.block, color: Colors.black),
                             SizedBox(width: 10),
-                            Text("Decline",
-                                style: TextStyle(color: Colors.black)),
+                            Text(
+                              "Decline",
+                              style: TextStyle(color: Colors.black),
+                            ),
                           ],
                         ),
                       ),
@@ -442,29 +484,28 @@ class _ChatinterfaceState extends State<Chatinterface> {
                             children: [
                               if (showDateHeader)
                                 Padding(
-                                  padding:
-                                      const EdgeInsets.symmetric(vertical: 8.0),
-                                  child: Center(
-                                    child: Container(
-                                      padding: const EdgeInsets.symmetric(
-                                          vertical: 5, horizontal: 10),
-                                      decoration: BoxDecoration(
-                                        color: Theme.of(context)
-                                            .colorScheme
-                                            .secondary,
-                                        borderRadius: BorderRadius.circular(10),
-                                      ),
-                                      child: Text(
-                                        formattedDate,
-                                        style: const TextStyle(
-                                          fontSize: 14,
-                                          fontWeight: FontWeight.bold,
-                                          color: Colors.black54,
+                                      padding: const EdgeInsets.symmetric(vertical: 10.0),
+                                      child: Center(
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 16, 
+                                            vertical: 5
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: Colors.grey[300],
+                                            borderRadius: BorderRadius.circular(16),
+                                          ),
+                                          child: Text(
+                                            formattedDate,
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              color: Colors.grey[700],
+                                              fontWeight: FontWeight.w500,
+                                            ),
+                                          ),
                                         ),
                                       ),
                                     ),
-                                  ),
-                                ),
                               message['isCurrentUser']
                                   ? ChatBubble(
                                       message: message['message'],
@@ -484,35 +525,58 @@ class _ChatinterfaceState extends State<Chatinterface> {
               padding: const EdgeInsets.only(left: 10, right: 10, bottom: 8),
               child: Row(
                 children: [
+                  // And update your TextField code
                   Expanded(
-                    child: TextField(
-                      controller: _controller,
-                      decoration: InputDecoration(
-                        hintText: "Type a message...",
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(40),
+                    child: Theme(
+                      data: Theme.of(context).copyWith(
+                        scrollbarTheme: ScrollbarThemeData(
+                          thumbVisibility: MaterialStateProperty.all(true),
+                          thickness: MaterialStateProperty.all(6),
+                          radius: const Radius.circular(10),
+                          thumbColor: MaterialStateProperty.all(
+                              Theme.of(context)
+                                  .colorScheme
+                                  .primary
+                                  .withOpacity(0.6)),
+                          mainAxisMargin: 4,
+                          crossAxisMargin: 4,
                         ),
                       ),
-                      onTap: () {
-                        WidgetsBinding.instance.addPostFrameCallback((_) {
-                          if (_scrollController.hasClients) {
-                            _scrollController.jumpTo(
-                                _scrollController.position.maxScrollExtent);
-                          }
-                        });
-                      },
+                      child: Scrollbar(
+                        controller: _inputScrollController,
+                        child: TextFormField(
+                          controller: _controller,
+                          scrollController: _inputScrollController,
+                          minLines: 1,
+                          maxLines: 4,
+                          keyboardType: TextInputType.multiline,
+                          decoration: InputDecoration(
+                            hintText: "Type a message...",
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 12,
+                            ),
+                          ),
+                          textInputAction: TextInputAction.newline,
+                        ),
+                      ),
                     ),
                   ),
                   const SizedBox(width: 10),
                   Container(
                     decoration: BoxDecoration(
-                      color: Theme.of(context).colorScheme.primary,
+                      color: isSend
+                          ? Theme.of(context).colorScheme.secondary
+                          : Theme.of(context).colorScheme.primary,
                       shape: BoxShape.circle,
                     ),
                     child: IconButton(
                       icon:
-                          const Icon(Icons.send, size: 28, color: Colors.white),
-                      onPressed: sendMessage,
+                          const Icon(Icons.send, size: 25, color: Colors.white),
+                      onPressed: isSend ? null : sendMessage,
                       padding: const EdgeInsets.all(12),
                       constraints: const BoxConstraints(),
                     ),

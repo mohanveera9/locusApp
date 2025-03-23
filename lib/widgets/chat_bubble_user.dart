@@ -45,7 +45,7 @@ class ChatBubbleUser extends StatelessWidget {
                   Padding(
                     padding: const EdgeInsets.only(right: 50.0),
                     child: Container(
-                      padding: const EdgeInsets.all(12),
+                      padding: const EdgeInsets.all(8),
                       margin: const EdgeInsets.symmetric(vertical: 5),
                       decoration: BoxDecoration(
                         color: Colors.grey[300],
@@ -60,7 +60,7 @@ class ChatBubbleUser extends StatelessWidget {
                         children: [
                           Padding(
                             padding: multiLineText
-                                ? EdgeInsets.only(bottom: 10)
+                                ? EdgeInsets.only(bottom: 14)
                                 : const EdgeInsets.only(right: 65.0),
                             child: Text(
                               message,
@@ -72,7 +72,7 @@ class ChatBubbleUser extends StatelessWidget {
                     ),
                   ),
                   Positioned(
-                    bottom: 10,
+                    bottom: 12,
                     right: 60,
                     child: Text(
                       time,
